@@ -58,37 +58,15 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.export_video)
         self.export_button.setEnabled(False)
 
+        self.transcribe_button = QPushButton("Transcribe")
+        self.transcribe_button.clicked.connect(self.transcribe_video)
+        self.transcribe_button.setEnabled(False)
+
         controls_layout.addWidget(self.load_button)
         controls_layout.addWidget(self.export_button)
         controls_layout.addStretch()
 
         layout.addLayout(controls_layout)
-
-    def on_video_loaded(self, result):
-        """Handle successful video load"""
-        if self.progress_dialog:
-            self.progress_dialog.close()
-            self.progress_dialog = None
-
-        try:
-            # Update video player
-            self.video_player.load_video(result["path"])
-
-            # Update unified timeline
-            self.timeline.set_audio_data(result["audio_data"])
-
-            # Enable export
-            self.export_button.setEnabled(True)
-
-            # Show success message
-            self.statusBar().showMessage(
-                f"Loaded video: {Path(result['path']).name} "
-                f"({result['duration']:.1f}s, {result['fps']:.2f} fps)",
-                5000,
-            )
-
-        except Exception as e:
-            self.on_load_error(str(e))
 
     def load_video(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -122,6 +100,23 @@ class MainWindow(QMainWindow):
             # Start loading
             self.loading_thread.start()
 
+    def transcribe_video(self):
+        # Get video path
+        video_path = self.video_player.current_video_path
+        if not video_path:
+            QMessageBox.warning(self, "Warning", "No video loaded")
+            return
+
+        # Get audio data
+        audio_data = self.video_processor.get_audio_data(video_path)
+
+        # Create and show progress dialog
+        self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog.show()
+
+        # Create worker and thread
+        # self.transcription_thread = QThread()
+
     def update_progress(self, value, status):
         """Update progress dialog"""
         if self.progress_dialog:
@@ -143,6 +138,9 @@ class MainWindow(QMainWindow):
 
             # Enable export
             self.export_button.setEnabled(True)
+
+            # Enable transcription
+            self.transcribe_button.setEnabled(True)
 
             # Show success message
             self.statusBar().showMessage(
