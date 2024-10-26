@@ -3,3 +3,5 @@ python-vlc>=3.0.18122
 pyqtgraph>=0.13.1
 numpy>=1.21.0
 pydub>=0.25.1
+simpler_whisper
+resampy>=0.2.2

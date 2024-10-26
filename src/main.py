@@ -13,9 +13,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from components.unified_timeline import UnifiedTimeline
 from components.video_player import VideoPlayer
-from components.waveform import WaveformView
-from components.timeline import TimelineWidget
 from utils.audio_processor import AudioProcessor
+from utils.transcription_worker import TranscriptionWorker
 from utils.video_processor import VideoProcessor
 from PySide6.QtCore import QThread
 from components.progress_dialog import ProgressDialog
@@ -64,6 +63,7 @@ class MainWindow(QMainWindow):
 
         controls_layout.addWidget(self.load_button)
         controls_layout.addWidget(self.export_button)
+        controls_layout.addWidget(self.transcribe_button)
         controls_layout.addStretch()
 
         layout.addLayout(controls_layout)
@@ -107,15 +107,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No video loaded")
             return
 
-        # Get audio data
-        audio_data = self.video_processor.get_audio_data(video_path)
-
         # Create and show progress dialog
         self.progress_dialog = ProgressDialog(self)
         self.progress_dialog.show()
 
         # Create worker and thread
-        # self.transcription_thread = QThread()
+        self.transcription_thread = TranscriptionWorker(video_path)
+        self.transcription_thread.transcription_progress.connect(
+            self.progress_dialog.set_progress
+        )
+        self.transcription_thread.transcription_done.connect(self.progress_dialog.close)
+        self.transcription_thread.start()
 
     def update_progress(self, value, status):
         """Update progress dialog"""
