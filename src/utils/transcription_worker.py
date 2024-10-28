@@ -1,6 +1,7 @@
+import time
 from typing import List
 import numpy as np
-from simpler_whisper.whisper import ThreadedWhisperModel, WhisperSegment
+from simpler_whisper.whisper import AsyncWhisperModel, WhisperSegment
 from PySide6.QtCore import QThread, Signal
 from pydub import AudioSegment
 import subprocess
@@ -16,35 +17,48 @@ class TranscriptionWorker(QThread):
         super().__init__()
         self.video_path = video_path
         self.sample_rate = 16000
+        self.chunk_ids = []
+        self.total_chunks = 0
 
-    def handle_result(self, chunk_id: int, segments: List[WhisperSegment], is_partial: bool):
+    def handle_result(
+        self, chunk_id: int, segments: List[WhisperSegment], is_partial: bool
+    ):
         text = " ".join([seg.text for seg in segments])
         print(
             f"Chunk {chunk_id} results ({'partial' if is_partial else 'final'}): {text}"
         )
-
+        self.chunk_ids.remove(chunk_id)
+        # self.transcription_result.emit(" ".join([s.text for s in transcription]))
+        self.transcription_progress.emit(
+            (self.total_chunks - len(self.chunk_ids)) * 100 // self.total_chunks
+        )
 
     def run(self):
         audio_sample = self.extract_audio(self.video_path)
-        chunk_size = self.sample_rate * 10  # 30 seconds of audio @ 16 kHz
-        whisper_model = ThreadedWhisperModel(
+        chunk_size = self.sample_rate * 30  # 30 seconds of audio @ 16 kHz
+        whisper_model = AsyncWhisperModel(
             R"data\ggml-small.en-q5_1.bin",
-            True,
             callback=self.handle_result,
+            use_gpu=False,
         )
         whisper_model.start()
+
+        self.total_chunks = len(audio_sample) // chunk_size + 1
+
         for start in range(0, len(audio_sample), chunk_size):
             chunk = audio_sample[start : start + chunk_size]
             if len(chunk) < chunk_size:
                 chunk = np.pad(chunk, (0, chunk_size - len(chunk)), "constant")
-            print(f"Queuing chunk {start // chunk_size + 1}")
+            chunk_id = whisper_model.transcribe(chunk)
+            print(f"Queuing chunk {chunk_id}")
             print(
                 f"Chunk size: {len(chunk)}, {len(chunk) / self.sample_rate} seconds, {chunk.dtype}"
             )
-            whisper_model.queue_audio(chunk)
+            self.chunk_ids.append(chunk_id)
 
-            # self.transcription_result.emit(" ".join([s.text for s in transcription]))
-            # self.transcription_progress.emit(start / len(audio_sample) * 100)
+        # wait for all chunks to be processed
+        while self.chunk_ids:
+            time.sleep(0.1)
 
     def extract_audio(self, video_path):
         """Extract audio from video file and return samples"""
