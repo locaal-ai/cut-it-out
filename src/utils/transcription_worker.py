@@ -10,7 +10,7 @@ import tempfile
 
 class TranscriptionWorker(QThread):
     transcription_done = Signal(str)
-    transcription_result = Signal(str)
+    transcription_result = Signal(List[dict])
     transcription_progress = Signal(int)
 
     def __init__(self, video_path):
@@ -19,16 +19,35 @@ class TranscriptionWorker(QThread):
         self.sample_rate = 16000
         self.chunk_ids = []
         self.total_chunks = 0
+        self.chunk_timestamps = {}  # Map chunk_ids to start times
 
     def handle_result(
         self, chunk_id: int, segments: List[WhisperSegment], is_partial: bool
     ):
-        text = " ".join([seg.text for seg in segments])
-        print(
-            f"Chunk {chunk_id} results ({'partial' if is_partial else 'final'}): {text}"
-        )
+        # Get chunk start time
+        chunk_start_time = self.chunk_timestamps.get(chunk_id, 0)
+
+        tokens = []
+
+        # Process each segment
+        for segment in segments:
+            # Process each token in the segment
+            for token in segment.tokens:
+                # Calculate absolute time for token
+                token_start = chunk_start_time + token.t0
+                token_end = chunk_start_time + token.t1
+
+                # Append token to list
+                tokens.append(
+                    {
+                        "text": token.text,
+                        "start": token_start,
+                        "end": token_end,
+                    }
+                )
+
         self.chunk_ids.remove(chunk_id)
-        # self.transcription_result.emit(" ".join([s.text for s in transcription]))
+        self.transcription_result.emit(tokens)
         self.transcription_progress.emit(
             (self.total_chunks - len(self.chunk_ids)) * 100 // self.total_chunks
         )
@@ -39,7 +58,7 @@ class TranscriptionWorker(QThread):
         whisper_model = AsyncWhisperModel(
             R"data\ggml-small.en-q5_1.bin",
             callback=self.handle_result,
-            use_gpu=False,
+            use_gpu=True,
         )
         whisper_model.start()
 
@@ -49,8 +68,17 @@ class TranscriptionWorker(QThread):
             chunk = audio_sample[start : start + chunk_size]
             if len(chunk) < chunk_size:
                 chunk = np.pad(chunk, (0, chunk_size - len(chunk)), "constant")
+            # convert from int16 to float32 [-1, 1]
+            chunk = chunk.astype(np.float32) / 32768.0
+
+            # Calculate timestamp in seconds
+            start_time = start / self.sample_rate
+
             chunk_id = whisper_model.transcribe(chunk)
-            print(f"Queuing chunk {chunk_id}")
+            # Store start time for this chunk
+            self.chunk_timestamps[chunk_id] = start_time
+
+            print(f"Queuing chunk {chunk_id} starting at {start_time:.2f}s")
             print(
                 f"Chunk size: {len(chunk)}, {len(chunk) / self.sample_rate} seconds, {chunk.dtype}"
             )
@@ -59,6 +87,9 @@ class TranscriptionWorker(QThread):
         # wait for all chunks to be processed
         while self.chunk_ids:
             time.sleep(0.1)
+
+        whisper_model.stop()
+        self.transcription_done.emit("Transcription done")
 
     def extract_audio(self, video_path):
         """Extract audio from video file and return samples"""
@@ -80,6 +111,8 @@ class TranscriptionWorker(QThread):
                 temp_audio.name,
             ],
             check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         # Load audio file

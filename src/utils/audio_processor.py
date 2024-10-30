@@ -28,6 +28,8 @@ class AudioProcessor:
                 temp_audio.name,
             ],
             check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         # Load audio file

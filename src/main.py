@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from typing import List
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -10,13 +11,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
+from PySide6.QtMultimedia import QMediaPlayer
 from components.unified_timeline import UnifiedTimeline
 from components.video_player import VideoPlayer
 from utils.audio_processor import AudioProcessor
 from utils.transcription_worker import TranscriptionWorker
 from utils.video_processor import VideoProcessor
-from PySide6.QtCore import QThread
 from components.progress_dialog import ProgressDialog
 from utils.async_worker import VideoLoadWorker
 
@@ -78,7 +79,7 @@ class MainWindow(QMainWindow):
 
         if file_path:
             # Create and show progress dialog
-            self.progress_dialog = ProgressDialog(self)
+            self.progress_dialog = ProgressDialog(self, "Loading Video...")
             self.progress_dialog.show()
 
             # Create worker and thread
@@ -108,16 +109,32 @@ class MainWindow(QMainWindow):
             return
 
         # Create and show progress dialog
-        self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog = ProgressDialog(self, "Transcribing Video...")
         self.progress_dialog.show()
 
         # Create worker and thread
         self.transcription_thread = TranscriptionWorker(video_path)
+
+        # Connect signals
         self.transcription_thread.transcription_progress.connect(
             self.progress_dialog.set_progress
         )
         self.transcription_thread.transcription_done.connect(self.progress_dialog.close)
+        self.transcription_thread.transcription_result.connect(
+            self.handle_transcription_results
+        )
         self.transcription_thread.start()
+
+    def handle_transcription_results(self, tokens: List[dict]):
+        """Handle transcription results from worker"""
+        # Store results
+        if not hasattr(self, "transcription_results"):
+            self.transcription_results = []
+        self.transcription_results.extend(tokens)
+
+        # Update timeline UI
+        if hasattr(self, "timeline_widget"):
+            self.timeline_widget.update_transcription(tokens)
 
     def update_progress(self, value, status):
         """Update progress dialog"""
@@ -150,6 +167,12 @@ class MainWindow(QMainWindow):
                 f"({result['duration']:.1f}s, {result['fps']:.2f} fps)",
                 5000,
             )
+
+            # Once video is loaded, ensure it's paused initially
+            self.video_player.player.pause()
+
+            # Add keyboard event handler if not already present
+            self.video_player.setFocusPolicy(Qt.StrongFocus)
 
         except Exception as e:
             self.on_load_error(str(e))
@@ -276,6 +299,14 @@ class MainWindow(QMainWindow):
         # If no markers left, disable export
         if not self.timeline.has_markers():
             self.export_button.setEnabled(False)
+
+    def keyPressEvent(self, event):
+        # Handle space bar press to play/pause
+        if event.key() == Qt.Key_Space:
+            if self.video_player.player.state() == QMediaPlayer.PlayingState:
+                self.video_player.player.pause()
+            else:
+                self.video_player.player.play()
 
 
 def main():
