@@ -20,6 +20,10 @@ class ProgressDialog(QDialog):
         self.progress_bar.setTextVisible(True)
         layout.addWidget(self.progress_bar)
 
+        # Status label
+        self.status_label = QLabel()
+        layout.addWidget(self.status_label)
+
         # Fixed size
         self.setFixedSize(300, 100)
 

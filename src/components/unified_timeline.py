@@ -1,7 +1,46 @@
 from PySide6.QtWidgets import QVBoxLayout, QFrame
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QRect
 from PySide6.QtGui import QKeySequence, QShortcut, QBrush, QColor
 import pyqtgraph as pg
+
+
+class ClippedTextItem(pg.GraphicsObject):
+    def __init__(self, text, start, end, **kwargs):
+        super().__init__()
+        self.text = text
+        self.start = start
+        self.end = end
+
+        # Create clipping rectangle - make it slightly smaller than the region
+        width = end - start
+        # Add small padding to prevent edge cases
+        padding = width * 0.01  # 1% of width as padding
+        self.rect_item = pg.QtWidgets.QGraphicsRectItem(
+            start + padding,  # Slightly in from start
+            -0.5,  # Reduced height
+            width - (2 * padding),  # Slightly less than full width
+            1.0,  # Reduced height
+        )
+        self.rect_item.setParentItem(self)
+        self.rect_item.setPen(pg.mkPen(None))  # No border
+        self.rect_item.setFlag(
+            self.rect_item.GraphicsItemFlag.ItemClipsChildrenToShape, True
+        )
+
+        # Create text item as child of rect
+        self.text_item = pg.TextItem(text=text, anchor=(0.5, 0.5), color="w")
+        self.text_item.setParentItem(self.rect_item)
+        # Position text exactly in middle of clipping rect
+        self.text_item.setPos(
+            start + (width / 2),  # Horizontal center
+            0.8,  # Vertical center of clipping rect
+        )
+
+    def boundingRect(self):
+        return self.rect_item.boundingRect()
+
+    def paint(self, painter, option, widget=None):
+        pass  # No need to paint anything here
 
 
 class UnifiedTimeline(QFrame):
@@ -101,6 +140,9 @@ class UnifiedTimeline(QFrame):
         # Create initial deleted region item
         self.deleted_regions = []
 
+        # Subtitle regions
+        self.subtitle_regions = []
+
     def set_audio_data(self, audio_data):
         """Set audio data and display waveform"""
         self.audio_data = audio_data
@@ -166,18 +208,20 @@ class UnifiedTimeline(QFrame):
             # Constrain to valid range
             click_time = max(0, min(self.duration, click_time))
 
-            # Check if click is near existing marker
-            is_near_marker = False
-            threshold = self.duration / 100  # 1% of duration
-            for pos, _ in self.markers:
-                if abs(pos - click_time) < threshold:
-                    is_near_marker = True
-                    break
+            # if ctrl is pressed, add marker
+            if event.modifiers() == Qt.ControlModifier:
+                # Check if click is near existing marker
+                is_near_marker = False
+                threshold = self.duration / 100  # 1% of duration
+                for pos, _ in self.markers:
+                    if abs(pos - click_time) < threshold:
+                        is_near_marker = True
+                        break
 
-            if not is_near_marker:
-                # Add new marker
-                is_start = not any(is_start for _, is_start in self.markers)
-                self.add_marker(click_time, is_start)
+                if not is_near_marker:
+                    # Add new marker
+                    is_start = not any(is_start for _, is_start in self.markers)
+                    self.add_marker(click_time, is_start)
 
             # Update position
             self.set_position(click_time)
@@ -394,3 +438,34 @@ class UnifiedTimeline(QFrame):
 
         # Consume the event
         event.accept()
+
+    def set_subtitle_segments(self, subtitles):
+        """Set subtitle segments and display them on the timeline"""
+        # Clear existing subtitle regions
+        for region in self.subtitle_regions:
+            self.plot_widget.removeItem(region[0])
+            self.plot_widget.removeItem(region[1])
+        self.subtitle_regions = []
+
+        # Add new subtitle regions
+        for subtitle in subtitles:
+            start = subtitle["start"]
+            end = subtitle["end"]
+            text = subtitle["text"]
+            width = end - start
+
+            # Create background region
+            background_region = pg.LinearRegionItem(
+                values=[start, end],
+                brush=pg.mkBrush(0, 255, 0, 50),
+                movable=False,
+                span=(0.8, 1.0),
+            )
+
+            # Create clipped text
+            text_item = ClippedTextItem(text=text, start=start, end=end)
+
+            # Add items to plot
+            self.plot_widget.addItem(background_region)
+            self.plot_widget.addItem(text_item)
+            self.subtitle_regions.append((background_region, text_item))

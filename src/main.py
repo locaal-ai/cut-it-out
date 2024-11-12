@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QMessageBox,
+    QLineEdit,
 )
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtMultimedia import QMediaPlayer
@@ -20,6 +21,7 @@ from utils.transcription_worker import TranscriptionWorker
 from utils.video_processor import VideoProcessor
 from components.progress_dialog import ProgressDialog
 from utils.async_worker import VideoLoadWorker
+import json
 
 
 class MainWindow(QMainWindow):
@@ -31,6 +33,7 @@ class MainWindow(QMainWindow):
 
         self.video_processor = VideoProcessor()
         self.audio_processor = AudioProcessor()
+        self.subtitles = []  # List of subtitle objects
 
         self.setup_ui()
         self.setup_connections()
@@ -62,12 +65,23 @@ class MainWindow(QMainWindow):
         self.transcribe_button.clicked.connect(self.transcribe_video)
         self.transcribe_button.setEnabled(False)
 
+        self.add_subtitle_button = QPushButton("Add Subtitle")
+        self.add_subtitle_button.clicked.connect(self.add_subtitle)
+
         controls_layout.addWidget(self.load_button)
         controls_layout.addWidget(self.export_button)
         controls_layout.addWidget(self.transcribe_button)
+        controls_layout.addWidget(self.add_subtitle_button)
         controls_layout.addStretch()
 
         layout.addLayout(controls_layout)
+
+        # Subtitle input
+        self.subtitle_input = QLineEdit()
+        self.subtitle_input.setPlaceholderText("Enter subtitle here...")
+        self.subtitle_input.returnPressed.connect(self.save_subtitle)
+        layout.addWidget(self.subtitle_input)
+        self.subtitle_input.hide()
 
     def load_video(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -142,38 +156,32 @@ class MainWindow(QMainWindow):
             self.progress_dialog.set_progress(value, status)
 
     def on_video_loaded(self, result):
-        """Handle successful video load"""
+        """Handle successful video load."""
         # Clean up progress dialog
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
-
         try:
             # Update video player
             self.video_player.load_video(result["path"])
-
             # Update waveform
             self.timeline.set_audio_data(result["audio_data"])
-
             # Enable export
             self.export_button.setEnabled(True)
-
             # Enable transcription
             self.transcribe_button.setEnabled(True)
-
             # Show success message
             self.statusBar().showMessage(
                 f"Loaded video: {Path(result['path']).name} "
                 f"({result['duration']:.1f}s, {result['fps']:.2f} fps)",
                 5000,
             )
-
             # Once video is loaded, ensure it's paused initially
-            self.video_player.player.pause()
-
+            self.video_player.pause()
             # Add keyboard event handler if not already present
             self.video_player.setFocusPolicy(Qt.StrongFocus)
-
+            # Load subtitles
+            self.load_subtitles_from_file()
         except Exception as e:
             self.on_load_error(str(e))
 
@@ -251,14 +259,9 @@ class MainWindow(QMainWindow):
 
     def setup_connections(self):
         """Set up signal/slot connections between components"""
-        # Timeline position changes update video position
-        self.timeline.position_changed.connect(self.on_timeline_position_changed)
-
-        # Timeline edit markers trigger video processing
-        self.timeline.section_deleted.connect(self.on_section_deleted)
-
         # Connect video player signals
         self.video_player.position_changed.connect(self.timeline.set_position)
+        self.video_player.position_changed.connect(self.update_subtitle)
         # self.video_player.duration_changed.connect(self.timeline.set_duration)
 
         # Connect timeline signals
@@ -267,7 +270,7 @@ class MainWindow(QMainWindow):
         self.timeline.play_toggled.connect(self.video_player.toggle_play)
 
     def on_timeline_position_changed(self, position):
-        """Handle timeline position changes"""
+        """Handle timeline position changes."""
         # Convert position in seconds to VLC position (0-1)
         if self.video_player.current_video_path:
             duration = self.video_processor.get_duration(
@@ -275,6 +278,7 @@ class MainWindow(QMainWindow):
             )
             vlc_pos = position / duration
             self.video_player.seek(vlc_pos)
+            self.update_subtitle(position)
 
     def on_video_position_changed(self, position):
         """Handle video position changes"""
@@ -285,6 +289,7 @@ class MainWindow(QMainWindow):
             time_pos = position * duration
             self.timeline.set_position(time_pos)
             self.waveform_view.update_position(time_pos)
+            self.update_subtitle(time_pos)
 
     def on_section_deleted(self, section):
         """Handle deletion of a timeline section"""
@@ -303,10 +308,83 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         # Handle space bar press to play/pause
         if event.key() == Qt.Key_Space:
-            if self.video_player.player.state() == QMediaPlayer.PlayingState:
-                self.video_player.player.pause()
-            else:
-                self.video_player.player.play()
+            self.video_player.toggle_play()
+
+    def subtitle_key_press(self, event):
+        if event.key() == Qt.Key_Return:
+            self.save_subtitle()
+        # if ctrl-space is pressed, play/pause the video
+        elif event.key() == Qt.Key_Space and event.modifiers() & Qt.ControlModifier:
+            self.video_player.toggle_play()
+        else:
+            return QLineEdit.keyPressEvent(self.subtitle_input, event)
+
+    def add_subtitle(self):
+        """Show subtitle input for adding a subtitle at the current position."""
+        if self.subtitle_input.isVisible():
+            self.subtitle_input.hide()
+        else:
+            self.subtitle_input.show()
+            self.subtitle_input.setFocus()
+
+    def save_subtitle(self):
+        """Save the subtitle for the current position."""
+        current_position = (
+            self.video_player.get_position()
+        )  # Get current position in seconds
+        start_time = current_position - 5
+        subtitle_text = self.subtitle_input.text()
+        if subtitle_text:
+            self.subtitles.append(
+                {"start": start_time, "end": current_position, "text": subtitle_text}
+            )
+            self.save_subtitles_to_file()
+            self.subtitle_input.clear()
+            self.timeline.set_subtitle_segments(self.subtitles)
+
+    def save_subtitles_to_file(self):
+        """Save subtitles to a JSON file."""
+        video_path = self.video_player.current_video_path
+        if video_path:
+            subtitle_file = (
+                Path(video_path)
+                .with_stem(Path(video_path).stem + "_subtitles")
+                .with_suffix(".json")
+            )
+            with open(subtitle_file, "w") as f:
+                json.dump(self.subtitles, f, indent=4)
+
+    def load_subtitles_from_file(self):
+        """Load subtitles from a JSON file."""
+        try:
+            video_path = self.video_player.current_video_path
+            if video_path:
+                subtitle_file = (
+                    Path(video_path)
+                    .with_stem(Path(video_path).stem + "_subtitles")
+                    .with_suffix(".json")
+                )
+                with open(subtitle_file, "r") as f:
+                    self.subtitles = json.load(f)
+
+                # set regions on timeline
+                self.timeline.set_subtitle_segments(self.subtitles)
+        except Exception as e:
+            self.subtitles = []
+
+    def update_subtitle(self, position):
+        """Update the subtitle based on the current position."""
+        # search for the subtitle that should be displayed at the current position
+        current_subtitle = None
+        for subtitle in self.subtitles:
+            if subtitle["start"] <= position <= subtitle["end"]:
+                current_subtitle = subtitle
+                break
+        if current_subtitle:
+            print(position, current_subtitle)
+            self.video_player.set_subtitle(current_subtitle["text"])
+        else:
+            self.video_player.set_subtitle(None)
 
 
 def main():
