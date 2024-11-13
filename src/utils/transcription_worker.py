@@ -13,8 +13,10 @@ class TranscriptionWorker(QThread):
     transcription_result = Signal(List[dict])
     transcription_progress = Signal(int)
 
-    def __init__(self, video_path):
+    def __init__(self, video_path, start=None, end=None):
         super().__init__()
+        self.start_time = start
+        self.end_time = end
         self.video_path = video_path
         self.sample_rate = 16000
         self.chunk_ids = []
@@ -53,7 +55,12 @@ class TranscriptionWorker(QThread):
         )
 
     def run(self):
-        audio_sample = self.extract_audio(self.video_path)
+        print(
+            f"Transcribing {self.video_path} from {self.start_time} to {self.end_time}"
+        )
+        audio_sample = self.extract_audio(
+            self.video_path, self.start_time, self.end_time
+        )
         chunk_size = self.sample_rate * 30  # 30 seconds of audio @ 16 kHz
         whisper_model = AsyncWhisperModel(
             R"data\ggml-small.en-q5_1.bin",
@@ -91,15 +98,37 @@ class TranscriptionWorker(QThread):
         whisper_model.stop()
         self.transcription_done.emit("Transcription done")
 
-    def extract_audio(self, video_path):
-        """Extract audio from video file and return samples"""
+    def extract_audio(self, video_path, start=None, end=None):
+        """
+        Extract audio from video file and return samples.
+
+        Args:
+            video_path (str): Path to video file
+            start (float, optional): Start time in seconds
+            end (float, optional): End time in seconds
+        """
         # Extract audio using ffmpeg
         temp_audio = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        subprocess.run(
+
+        # Base command
+        cmd = [
+            "ffmpeg",
+            "-i",
+            video_path,
+        ]
+
+        # Add seek argument if start time provided
+        if start is not None:
+            cmd.extend(["-ss", str(start)])
+
+        # Add duration argument if both start and end provided
+        if start is not None and end is not None:
+            duration = end - start
+            cmd.extend(["-t", str(duration)])
+
+        # Add output options
+        cmd.extend(
             [
-                "ffmpeg",
-                "-i",
-                video_path,
                 "-vn",  # No video
                 "-acodec",
                 "pcm_s16le",  # PCM format
@@ -109,7 +138,11 @@ class TranscriptionWorker(QThread):
                 "1",  # Mono
                 "-y",  # Overwrite output file
                 temp_audio.name,
-            ],
+            ]
+        )
+
+        subprocess.run(
+            cmd,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -309,6 +309,9 @@ class MainWindow(QMainWindow):
         # Handle space bar press to play/pause
         if event.key() == Qt.Key_Space:
             self.video_player.toggle_play()
+        elif event.key() == Qt.Key_T and event.modifiers() & Qt.ControlModifier:
+            print("Transcribing last segment")
+            self.transcribe_last_segment()
 
     def subtitle_key_press(self, event):
         if event.key() == Qt.Key_Return:
@@ -316,8 +319,38 @@ class MainWindow(QMainWindow):
         # if ctrl-space is pressed, play/pause the video
         elif event.key() == Qt.Key_Space and event.modifiers() & Qt.ControlModifier:
             self.video_player.toggle_play()
+        # if ctrl-t is pressed, transcribe last 5 seconds
+        elif event.key() == Qt.Key_T and event.modifiers() & Qt.ControlModifier:
+            print("Transcribing last segment")
+            self.transcribe_last_segment()
         else:
             return QLineEdit.keyPressEvent(self.subtitle_input, event)
+
+    def transcribe_last_segment(self):
+        """Transcribe the last 5 seconds of audio"""
+        current_pos = self.video_player.get_position()
+        start_pos = max(0, current_pos - 5)  # Get position 5 seconds back
+
+        # Create transcription worker for segment
+        worker = TranscriptionWorker(
+            self.video_player.current_video_path, start_pos, current_pos
+        )
+        worker.transcription_result.connect(self._handle_segment_transcription)
+
+        # Store the worker as instance variable to prevent garbage collection
+        self.segment_transcription_worker = worker
+
+        # Start transcription
+        print(f"Transcribing segment from {start_pos:.2f}s to {current_pos:.2f}s")
+        worker.start()
+
+    def _handle_segment_transcription(self, tokens):
+        """Handle transcription result for segment"""
+        if tokens:
+            # Combine all token text
+            text = " ".join(token["text"] for token in tokens)
+            # Update subtitle input
+            self.subtitle_input.setText(text)
 
     def add_subtitle(self):
         """Show subtitle input for adding a subtitle at the current position."""
