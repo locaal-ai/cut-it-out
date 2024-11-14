@@ -62,13 +62,16 @@ class TranscriptionWorker(QThread):
             self.video_path, self.start_time, self.end_time
         )
         chunk_size = self.sample_rate * 30  # 30 seconds of audio @ 16 kHz
+        print("Load whisper model")
         whisper_model = AsyncWhisperModel(
             R"data\ggml-small.en-q5_1.bin",
             callback=self.handle_result,
             use_gpu=True,
         )
+        print("Starting whisper model")
         whisper_model.start()
 
+        print("Transcribing audio")
         self.total_chunks = len(audio_sample) // chunk_size + 1
 
         for start in range(0, len(audio_sample), chunk_size):
@@ -81,6 +84,7 @@ class TranscriptionWorker(QThread):
             # Calculate timestamp in seconds
             start_time = start / self.sample_rate
 
+            print(f"Transcribing chunk starting at {start_time:.2f}s")
             chunk_id = whisper_model.transcribe(chunk)
             # Store start time for this chunk
             self.chunk_timestamps[chunk_id] = start_time
@@ -95,6 +99,7 @@ class TranscriptionWorker(QThread):
         while self.chunk_ids:
             time.sleep(0.1)
 
+        print("Stopping whisper model")
         whisper_model.stop()
         self.transcription_done.emit("Transcription done")
 
