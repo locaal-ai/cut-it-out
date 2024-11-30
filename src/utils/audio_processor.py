@@ -28,10 +28,12 @@ class AudioProcessor:
                 temp_audio.name,
             ],
             check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         # Load audio file
-        audio = AudioSegment.from_wav(temp_audio.name)
+        audio: AudioSegment = AudioSegment.from_wav(temp_audio.name)
 
         # Convert to numpy array and normalize
         samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
